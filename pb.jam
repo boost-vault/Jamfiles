@@ -1,0 +1,163 @@
+# Copyright 2010 Rodrigo Pinho Pereira de Souza ( pinhopro at gmail dot com )
+#
+# Distributed under the Boost Software License, Version 1.0. (See
+# accompanying file LICENSE_1_0.txt or copy at
+# http://www.boost.org/LICENSE_1_0.txt)
+
+# Google Protocol Buffers library support module
+#
+# toolset.using pb : /usr/local ;
+#
+# This module supports pre compilation of .proto files using the google 
+# protc compiler. Note that you must list all your proto files in sources
+#
+# Example:
+#
+#     exe myapp : myapp.cpp messages.proto 
+#                 /pb//protobuflib ;
+#
+
+
+import modules ;
+import feature ;
+import errors ;
+import type ;
+import "class" : new ;
+import generators ;
+import project ;
+import toolset : flags ;
+
+project.initialize $(__name__) ;
+project pb ;
+
+.project = [ project.current ] ;
+
+# Helper utils for easy debug output
+if [ MATCH (--debug-configuration) : [ modules.peek : ARGV ] ]
+{
+  .debug-configuration = TRUE ;
+}
+
+local rule debug-message ( message * )
+{
+  if $(.debug-configuration) = TRUE
+  {
+    ECHO notice: [protobuf-cfg] $(message) ;
+  }
+}
+
+
+rule init ( prefix : condition * )
+{
+  project.push-current $(.project) ;
+
+  .prefix = $(prefix) ;
+
+  .incprefix = $(prefix)/include ;
+  .libprefix = $(prefix)/lib ;
+  .binprefix = $(prefix)/bin ;   
+
+  debug-message  "rule init (" $(prefix) "," $(condition) ")" ;
+  debug-message "include path: " $(.incprefix) ;
+  debug-message "library path: " $(.libprefix) ;
+  debug-message "bin path" $(.binprefix) ;
+  
+  if ! $(.initialized)
+  {
+    .initialized = true ;
+    debug-message "initializing protobuf..." ;
+
+    debug-message "registering proto type " ;
+    type.register PROTO : proto ;
+
+    debug-message "registering protoc compiler " ;
+    generators.register [ new proto-generator pb.protoc : PROTO : CPP(%.pb)  ] ;
+
+    .PREFIX = $(prefix) ;
+    debug-message "protobuf initialized." ;
+  }
+
+  debug-message "setup path for protoc tool" ;
+  toolset.flags pb.protoc .BINPREFIX : $(.binprefix) ;
+
+  local usage-requirements =
+      <include>$(.incprefix)
+      <library-path>$(.libprefix)
+      <dll-path>$(.libprefix)
+    ;
+  debug-message "usage-requirements: " $(usage-requirements) ;
+
+  local target-requirements = $(condition) ;
+
+  lib protobuflib : 
+    : # requirements 
+      <name>protobuf
+       $(target-requirements)
+    : # default-build
+    : # usage-requirements
+      $(usage-requirements)
+    ;
+
+  lib protobuf-litelib : 
+    : # requirements 
+      <name>protobuf-lite
+       $(target-requirements)
+    : # default-build
+    : # usage-requirements
+      $(usage-requirements)
+    ;
+
+  type.change-generated-target-suffix PROTO : : cc ;
+  project.pop-current ;
+
+  debug-message "module pb initialized" ;
+}
+
+rule initialized ( )
+{
+  return $(.initialized) ;
+}
+
+
+class proto-generator : generator 
+{
+  rule __init__ ( * : * )
+  {
+    generator.__init__ $(1) : $(2) : $(3) : $(4) : $(5) : $(6) : $(7) : $(8) : $(9) ;
+  }
+
+  rule run ( project name ? : property-set : sources * )
+  {
+     if ! $(sources[2])
+     { 
+       local t = [ $(sources[1]).type ] ;
+       if $(t) = PROTO
+       {
+         if ! $(name)
+         {
+           name = [ generator.determine-output-name $(sources) ] ;
+           name = $(name)".pb" ;
+         }
+
+         local a = [ new action $(sources[1]) : pb.protoc : $(property-set) ] ;
+
+         local suffix = [ type.generated-target-suffix CPP : $(property-set) ] ;
+         type.change-generated-target-suffix CPP : $(property-set) : "cc" ;
+
+         local target = [ new file-target $(name) : CPP : $(project) : $(a) ] ;
+
+         type.change-generated-target-suffix CPP : $(property-set) : $(suffix) ;
+
+         DEPENDS all : [ $(target).actualize ] ;
+
+         return [ virtual-target.register $(target) ] ;
+      }
+    }
+  }
+}
+
+actions protoc
+{
+  $(.BINPREFIX[-1])/protoc $(>)  --cpp_out=$(<:P) ;
+}
+
